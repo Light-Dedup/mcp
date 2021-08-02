@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
 	} else {
 		char *name = basename(argv[1]);
 		EXIT_ON("mkdirat",
-			mkdirat(dst_fd, name, dir_stat.st_mode) == -1);
+			mkdirat(dst_fd, name, dir_stat.st_mode) == -1 && errno != EEXIST);
 		dst_fd = openat(dst_fd, name, O_DIRECTORY);
 		EXIT_ON("open", dst_fd == -1);
 	}
