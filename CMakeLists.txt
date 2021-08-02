@@ -21,7 +21,7 @@ target_link_libraries(${PROJECT_NAME}
         pthread
 )
 #target_compile_features(${PROJECT_NAME} PRIVATE cxx_auto_type)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 11)
 
 #target_compile_features(${PROJECT_NAME} PRIVATE c_auto_type)
 set(CMAKE_C_STANDARD 11)
