@@ -13,6 +13,8 @@
 #include <string>
 #include <queue>
 #include <thread>
+#include <algorithm>
+#include <chrono>
 
 using namespace std;
 
@@ -31,13 +33,22 @@ using namespace std;
 		}						\
 	} while (0)
 
+struct FileWork {
+	size_t size;
+	int src_fd;
+	int dst_fd;
+	FileWork(size_t _size, int _src_fd, int _dst_fd) {
+		size = _size;
+		src_fd = _src_fd;
+		dst_fd = _dst_fd;
+	}
+	bool operator < (const FileWork &rhs) const {
+		return size > rhs.size;
+	}
+};
+
 void handle_regular_file(
-	priority_queue<
-		pair<size_t, int>,
-		vector<pair<size_t, int> >,
-		greater<pair<size_t, int> >
-	> &pq,
-	vector<vector<pair<int, int> > > &jobs,
+	vector<FileWork> &files,
 	struct dirent *de,
 	int dst_dir_fd)
 {
@@ -47,11 +58,7 @@ void handle_regular_file(
 	EXIT_ON("stat", fstat(src_fd, &statbuf) == -1);
 	int dst_fd = openat(dst_dir_fd, de->d_name,
 		O_CREAT | O_TRUNC | O_WRONLY, statbuf.st_mode);
-	auto data = pq.top();
-	pq.pop();
-	jobs[data.second].emplace_back(src_fd, dst_fd);
-	data.first += statbuf.st_size;
-	pq.push(data);
+	files.emplace_back(statbuf.st_size, src_fd, dst_fd);
 }
 void handle_symbolic_link(
 	int dst_fd,
@@ -74,12 +81,7 @@ void handle_symbolic_link(
 	EXIT_ON("symlink", symlinkat(target_str.c_str(), dst_fd, de->d_name) == -1);
 }
 void cp_dir(
-	priority_queue<
-		pair<size_t, int>,
-		vector<pair<size_t, int> >,
-		greater<pair<size_t, int> >
-	> &pq,
-	vector<vector<pair<int, int> > > &jobs,
+	vector<FileWork> &files,
 	DIR *src,
 	int dst_fd)
 {
@@ -92,7 +94,7 @@ void cp_dir(
 		}
 		switch (de->d_type) {
 		case DT_REG:
-			handle_regular_file(pq, jobs, de, dst_fd);
+			handle_regular_file(files, de, dst_fd);
 			break;
 		case DT_LNK:
 			handle_symbolic_link(dst_fd, de);
@@ -108,7 +110,7 @@ void cp_dir(
 			EXIT_ON("fchdir", fchdir(src_fd2) == -1);
 			DIR *src2 = fdopendir(src_fd2);
 			EXIT_ON("opendir", src2 == NULL);
-			cp_dir(pq, jobs, src2, dst_fd2);
+			cp_dir(files, src2, dst_fd2);
 			EXIT_ON("chdir", chdir("..") == -1);
 			EXIT_ON("closedir", closedir(src2) == -1);
 			EXIT_ON("close", close(dst_fd2) == -1);
@@ -146,6 +148,7 @@ void cp_func(const vector<pair<int, int> > &jobs, size_t buf_len) {
 }
 
 int main(int argc, char **argv) {
+	using namespace std::chrono;
 	if (argc < 4) {
 		cout << "Usage: " << argv[0] <<
 			" src_dir dst_dir thread_num [buf_bytes]" << endl;
@@ -158,6 +161,9 @@ int main(int argc, char **argv) {
 	} else {
 		buf_len = atoi(argv[4]);
 	}
+	cout << "Traversing the source directory..." << endl;
+	auto start_time = steady_clock::now();
+
 	int src_fd = open(argv[1], O_DIRECTORY);
 	EXIT_ON("open", src_fd == -1);
 	struct stat dir_stat;
@@ -180,6 +186,19 @@ int main(int argc, char **argv) {
 	DIR *src = fdopendir(src_fd);
 	EXIT_ON("opendir", src == NULL);
 
+	vector<FileWork> files;
+	cp_dir(files, src, dst_fd);
+	EXIT_ON("closedir", closedir(src) == -1);
+	EXIT_ON("close", close(dst_fd) == -1);
+
+	auto end_time = steady_clock::now();
+	cout << "Done. " << duration_cast<nanoseconds>(
+			end_time - start_time).count() / 1e9
+		<< "seconds used" << endl;
+
+	cout << "Assigning works to the threads..." << endl;
+	start_time = steady_clock::now();
+	sort(files.begin(), files.end());
 	priority_queue<
 		pair<size_t, int>,
 		vector<pair<size_t, int> >,
@@ -189,10 +208,13 @@ int main(int argc, char **argv) {
 		pq.emplace(0, i);
 	}
 	vector<vector<pair<int, int> > > jobs(thread_num);
-	cp_dir(pq, jobs, src, dst_fd);
-	EXIT_ON("closedir", closedir(src) == -1);
-	EXIT_ON("close", close(dst_fd) == -1);
-
+	for (auto &work : files) {
+		auto data = pq.top();
+		pq.pop();
+		data.first += work.size;
+		jobs[data.second].emplace_back(work.src_fd, work.dst_fd);
+		pq.push(data);
+	}
 	while (!pq.empty()) {
 		auto data = pq.top();
 		pq.pop();
@@ -201,7 +223,13 @@ int main(int argc, char **argv) {
 			cout << ' ';
 	}
 	cout << endl;
+	end_time = steady_clock::now();
+	cout << "Done. " << duration_cast<nanoseconds>(
+			end_time - start_time).count() / 1e9
+		<< "seconds used" << endl;
 
+	cout << "Copying..." << endl;
+	start_time = steady_clock::now();
 	vector<thread> threads;
 	for (int i = 0; i < thread_num; ++i) {
 		threads.emplace_back(cp_func, jobs[i], buf_len);
@@ -209,6 +237,10 @@ int main(int argc, char **argv) {
 	for (int i = 0; i < thread_num; ++i) {
 		threads[i].join();
 	}
+	end_time = steady_clock::now();
+	cout << "Done. " << duration_cast<nanoseconds>(
+			end_time - start_time).count() / 1e9
+		<< "seconds used" << endl;
 
 	return 0;
 }
