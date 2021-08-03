@@ -7,6 +7,7 @@
 #include <libgen.h>
 
 #include <string.h>
+#include <assert.h>
 
 #include <iostream>
 #include <string>
@@ -191,6 +192,15 @@ int main(int argc, char **argv) {
 	cp_dir(pq, jobs, src, dst_fd);
 	EXIT_ON("closedir", closedir(src) == -1);
 	EXIT_ON("close", close(dst_fd) == -1);
+
+	while (!pq.empty()) {
+		auto data = pq.top();
+		pq.pop();
+		cout << data.second << ':' << data.first;
+		if (!pq.empty())
+			cout << ' ';
+	}
+	cout << endl;
 
 	vector<thread> threads;
 	for (int i = 0; i < thread_num; ++i) {
