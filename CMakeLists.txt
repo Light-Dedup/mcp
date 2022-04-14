@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.2)
-project(main)
+project(mcp)
 
 IF (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING
